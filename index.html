@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>MyApp - Dashboard</title>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
 
   <style>
     :root { --primary: #1e3a8a; --success: #22c55e; }
@@ -104,6 +107,15 @@
       color: white; padding: 25px; border-radius: 16px; text-align: center; margin-bottom: 30px;
     }
     .balance-info h1 { font-size: 38px; margin: 8px 0; }
+
+    .withdrawal-item {
+      background: #f8fafc; padding: 18px; border-radius: 14px; margin-bottom: 14px;
+      border-left: 6px solid #eab308;
+    }
+    .withdrawal-item.done { border-left-color: #22c55e; }
+    .status { padding: 7px 16px; border-radius: 30px; font-size: 14px; font-weight: 600; }
+    .pending { background: #fef3c7; color: #d97706; }
+    .done { background: #dcfce7; color: #16a34a; }
   </style>
 </head>
 <body>
@@ -147,7 +159,10 @@
       <ul>
         <li onclick="loadPage('dashboard')"><i class="fas fa-home"></i> Dashboard</li>
         <li onclick="loadPage('email-add')"><i class="fas fa-envelope"></i> Add Email</li>
+        <li onclick="loadPage('earn-money')"><i class="fas fa-money-bill-wave"></i> Earn Money</li>
         <li onclick="loadPage('withdrawal')"><i class="fas fa-wallet"></i> Withdrawal</li>
+        <li onclick="loadPage('withdrawal-status')"><i class="fas fa-list-check"></i> Withdrawal Status</li>
+        <li onclick="loadPage('email-status')"><i class="fas fa-check-circle"></i> Email Status</li>
         <li onclick="logout()"><i class="fas fa-sign-out-alt"></i> Logout</li>
       </ul>
     </div>
@@ -167,93 +182,207 @@
   </div>
 
   <script>
-    const API_BASE = "https://allapi.sawanenter7209.workers.dev/";
+    const firebaseConfig = {
+      apiKey: "AIzaSyCkl8VO2PKGbAXxVTYPaUWoCNHbu4yvxfw",
+      authDomain: "mail-5e9aa.firebaseapp.com",
+      databaseURL: "https://mail-5e9aa-default-rtdb.firebaseio.com",
+      projectId: "mail-5e9aa",
+      storageBucket: "mail-5e9aa.firebasestorage.app",
+      messagingSenderId: "641872846790",
+      appId: "1:641872846790:web:6fb7aa7725d0a3c10d9cc7"
+    };
 
-    async function apiCall(endpoint, method = "POST", body = {}) {
-      try {
-        const res = await fetch(API_BASE + endpoint, {
-          method: method,
-          headers: { "Content-Type": "application/json" },
-          body: method === "POST" ? JSON.stringify(body) : null
-        });
-        return await res.json();
-      } catch (e) {
-        console.error(e);
-        return { success: false, message: "Network error, please try again" };
-      }
-    }
+    if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
+    const db = firebase.database();
 
     // Toggle Login/Register
     function showRegister() { document.getElementById('loginForm').style.display='none'; document.getElementById('registerForm').style.display='block'; }
     function showLogin() { document.getElementById('registerForm').style.display='none'; document.getElementById('loginForm').style.display='block'; }
 
-    window.registerUser = async function() {
+    window.registerUser = function() {
       const email = document.getElementById('regEmail').value.trim();
       const pass = document.getElementById('regPassword').value.trim();
       const confirm = document.getElementById('regConfirmPassword').value.trim();
-
       if (pass !== confirm) return alert("Passwords do not match!");
       if (pass.length < 6) return alert("Password minimum 6 characters hona chahiye");
-
-      const result = await apiCall("register", "POST", { email, password: pass });
-      if (result.success) {
-        alert("✅ Registration Successful!");
-        showLogin();
-      } else {
-        alert(result.message || "Registration failed");
-      }
+      auth.createUserWithEmailAndPassword(email, pass).then(() => { alert("Registration Successful!"); showLogin(); }).catch(e => alert(e.message));
     };
 
-    window.loginUser = async function() {
+    window.loginUser = function() {
       const email = document.getElementById('loginEmail').value.trim();
       const pass = document.getElementById('loginPassword').value.trim();
-
-      const result = await apiCall("login", "POST", { email, password: pass });
-      if (result.success) {
-        localStorage.setItem("uid", result.uid);
+      auth.signInWithEmailAndPassword(email, pass).then(() => {
         document.getElementById('authContainer').style.display = 'none';
         document.getElementById('mainApp').style.display = 'block';
         loadDashboard();
         startLiveWallet();
-      } else {
-        alert(result.message || "Login Failed");
-      }
+      }).catch(e => alert("Login Failed: " + e.message));
     };
 
-    // Live Wallet
-    async function startLiveWallet() {
-      const uid = localStorage.getItem("uid");
-      if (!uid) return;
+    auth.onAuthStateChanged(user => {
+      if (user) {
+        document.getElementById('authContainer').style.display = 'none';
+        document.getElementById('mainApp').style.display = 'block';
+        loadDashboard();
+        startLiveWallet();
+      }
+    });
 
-      setInterval(async () => {
-        const res = await apiCall("balance", "POST", { uid });
-        if (res.success) {
-          document.getElementById('walletAmount').textContent = (res.balance || 0).toFixed(2);
-        }
-      }, 3000);
+    document.getElementById('menuBtn').addEventListener('click', () => document.getElementById('sidebar').classList.toggle('active'));
+
+    // Live Wallet
+    function calculateAvailableBalance(userId, callback) {
+      let earned = 0, withdrawn = 0;
+      db.ref('addedEmails').once('value', snap => {
+        snap.forEach(child => {
+          const d = child.val();
+          if (d.userId === userId && d.status === "Done" && d.cleaned === true) earned += (d.reward || 0);
+        });
+        db.ref('withdrawals/' + userId).once('value', wSnap => {
+          wSnap.forEach(child => {
+            if (child.val().status === "Done") withdrawn += (child.val().amount || 0);
+          });
+          callback(Math.max(0, earned - withdrawn));
+        });
+      });
+    }
+
+    let walletListener = null;
+    function startLiveWallet() {
+      const user = auth.currentUser;
+      if (!user) return;
+      if (walletListener) walletListener.off();
+      walletListener = db.ref().on('value', () => {
+        calculateAvailableBalance(user.uid, (bal) => {
+          document.getElementById('walletAmount').textContent = bal.toFixed(2);
+        });
+      });
     }
 
     // Dashboard
     function loadDashboard() {
+      const user = auth.currentUser;
       let html = `
         <h1><i class="fas fa-home"></i> Welcome Back!</h1>
         <div class="stats-grid">
           <div class="stat-card"><h3>Total Added Emails</h3><h2 id="totalEmails">0</h2></div>
           <div class="stat-card"><h3>Total Earn Money</h3><h2 id="totalEarn">$0.00</h2></div>
           <div class="stat-card"><h3>Total Withdrawal</h3><h2 id="totalWithdrawal">0</h2></div>
+          <div class="stat-card"><h3>Pending Withdrawal</h3><h2 id="pendingWithdrawal" style="color:#d97706;">0</h2></div>
+          <div class="stat-card"><h3>Completed Withdrawal</h3><h2 id="completeWithdrawal" style="color:#16a34a;">0</h2></div>
         </div>
       `;
       document.getElementById('pageContent').innerHTML = html;
+
+      db.ref('addedEmails').on('value', snap => {
+        let emails = 0, earn = 0;
+        snap.forEach(child => {
+          const d = child.val();
+          if (d.userId === user.uid) {
+            emails++;
+            if (d.status === "Done" && d.cleaned === true) earn += (d.reward || 0);
+          }
+        });
+        document.getElementById('totalEmails').textContent = emails;
+        document.getElementById('totalEarn').textContent = '$' + earn.toFixed(2);
+      });
+
+      db.ref('withdrawals/' + user.uid).on('value', snap => {
+        let totalW = 0, pending = 0, complete = 0;
+        snap.forEach(child => {
+          totalW++;
+          if (child.val().status === "Done") complete++;
+          else pending++;
+        });
+        document.getElementById('totalWithdrawal').textContent = totalW;
+        document.getElementById('pendingWithdrawal').textContent = pending;
+        document.getElementById('completeWithdrawal').textContent = complete;
+      });
     }
 
-    // Profile
+    // ==================== PROFILE SYSTEM ====================
     window.showProfileModal = function() {
-      alert("Profile System Coming Soon (Connected via Worker)");
+      const user = auth.currentUser;
+      if (!user) return alert("Please login first!");
+
+      db.ref('users/' + user.uid).once('value').then(snap => {
+        const data = snap.val() || {};
+        let html = `
+          <div style="text-align:center; margin-bottom:25px;">
+            <h3>${data.name || 'User Name'}</h3>
+            <p style="color:#64748b;">${user.email}</p>
+          </div>
+          <div class="btn-group">
+            <button class="btn" onclick="viewProfile()">📋 View Profile</button>
+            <button class="btn" onclick="editProfile()">✏️ Edit Profile</button>
+          </div>
+        `;
+        document.getElementById('profileContent').innerHTML = html;
+        document.getElementById('profileModal').style.display = 'flex';
+      });
+    };
+
+    function viewProfile() {
+      const user = auth.currentUser;
+      db.ref('users/' + user.uid).once('value').then(snap => {
+        const d = snap.val() || {};
+        let html = `
+          <div class="profile-info">
+            <strong>Name:</strong> ${d.name || 'Not Set'}<br>
+            <strong>Email:</strong> ${user.email}<br>
+            <strong>Date of Birth:</strong> ${d.dob || 'Not Set'}<br>
+            <strong>Gender:</strong> ${d.gender || 'Not Set'}<br>
+            <strong>UPI ID:</strong> ${d.upi || 'Not Set'}<br>
+            <strong>Phone:</strong> ${d.phone || 'Not Set'}
+          </div>
+        `;
+        document.getElementById('profileContent').innerHTML = html;
+      });
+    }
+
+    function editProfile() {
+      const user = auth.currentUser;
+      db.ref('users/' + user.uid).once('value').then(snap => {
+        const d = snap.val() || {};
+        let html = `
+          <div class="form-group"><label>Full Name</label><input id="editName" value="${d.name || ''}"></div>
+          <div class="form-group"><label>Date of Birth</label><input type="date" id="editDob" value="${d.dob || ''}"></div>
+          <div class="form-group"><label>Gender</label>
+            <select id="editGender">
+              <option value="">Select Gender</option>
+              <option value="Male" ${d.gender==='Male'?'selected':''}>Male</option>
+              <option value="Female" ${d.gender==='Female'?'selected':''}>Female</option>
+              <option value="Other" ${d.gender==='Other'?'selected':''}>Other</option>
+            </select>
+          </div>
+          <div class="form-group"><label>UPI ID</label><input id="editUpi" value="${d.upi || ''}" placeholder="yourupi@okaxis"></div>
+          <div class="form-group"><label>Phone Number</label><input id="editPhone" value="${d.phone || ''}"></div>
+          <button class="btn" onclick="saveProfileData()">Save Changes</button>
+        `;
+        document.getElementById('profileContent').innerHTML = html;
+      });
+    }
+
+    window.saveProfileData = function() {
+      const user = auth.currentUser;
+      const data = {
+        name: document.getElementById('editName').value.trim(),
+        dob: document.getElementById('editDob').value,
+        gender: document.getElementById('editGender').value,
+        upi: document.getElementById('editUpi').value.trim(),
+        phone: document.getElementById('editPhone').value.trim(),
+        updatedAt: Date.now()
+      };
+      db.ref('users/' + user.uid).update(data).then(() => {
+        alert("✅ Profile Updated Successfully!");
+        viewProfile();
+      });
     };
 
     window.closeProfileModal = () => document.getElementById('profileModal').style.display = 'none';
 
-    // Add Email
+    // Add Email Page
     function loadAddEmail() {
       let html = `
         <h1><i class="fas fa-envelope"></i> Add New Email</h1>
@@ -265,55 +394,142 @@
       document.getElementById('pageContent').innerHTML = html;
     }
 
-    window.addNewEmail = async function() {
+    window.addNewEmail = function() {
       const email = document.getElementById('addEmail').value.trim();
       const pass = document.getElementById('addPass').value.trim();
       const msg = document.getElementById('addMsg');
-      const uid = localStorage.getItem("uid");
-
+      const user = auth.currentUser;
       if (!email || !pass) return msg.innerHTML = `<span style="color:red">Email and Password required</span>`;
 
-      const result = await apiCall("add-email", "POST", { uid, email, password: pass });
-      if (result.success) {
+      db.ref('addedEmails').push({
+        email: email,
+        password: pass,
+        status: "Pending",
+        timestamp: Date.now(),
+        userId: user.uid,
+        cleaned: false
+      }).then(() => {
         msg.innerHTML = `<span style="color:green">✅ Email sent to admin for verification.</span>`;
         document.getElementById('addEmail').value = '';
         document.getElementById('addPass').value = '';
-      } else {
-        msg.innerHTML = `<span style="color:red">${result.message}</span>`;
-      }
+      });
     };
 
-    // Withdrawal
+    // Withdrawal Page
     function loadWithdrawal() {
       let html = `
         <h1><i class="fas fa-wallet"></i> Withdrawal</h1>
         <div class="balance-info">
           <h2>Available Balance</h2>
           <h1 id="availableBalance">$0.00</h1>
+          <small>Minimum Withdrawal: $1</small>
         </div>
         <h2>Request Withdrawal</h2>
-        <div class="form-group"><label>Amount (USD)</label><input type="number" id="amount" min="1" step="0.01"></div>
+        <div class="form-group"><label>Withdrawal Amount (USD)</label><input type="number" id="amount" placeholder="Enter amount (min $1)" min="1" step="0.01"></div>
+        <div class="form-group">
+          <label>Payment Method</label>
+          <select id="method" onchange="togglePaymentFields()">
+            <option value="UPI">UPI</option>
+            <option value="Bank">Bank Transfer</option>
+          </select>
+        </div>
+        <div id="upiFields"><div class="form-group"><label>UPI ID</label><input type="text" id="upiId" placeholder="example@upi"></div></div>
+        <div id="bankFields" style="display:none;">
+          <div class="form-group"><label>Bank Holder Name</label><input type="text" id="holderName"></div>
+          <div class="form-group"><label>Bank Name</label><input type="text" id="bankName"></div>
+          <div class="form-group"><label>Account Number</label><input type="text" id="accountNo"></div>
+          <div class="form-group"><label>IFSC Code</label><input type="text" id="ifsc"></div>
+        </div>
         <button class="btn" onclick="requestWithdrawal()">Request Withdrawal</button>
         <div id="errorMsg" style="color:red; margin-top:15px; text-align:center;"></div>
+        <h2 style="margin-top:40px;">Withdrawal History</h2>
+        <div id="withdrawalList">Loading history...</div>
       `;
       document.getElementById('pageContent').innerHTML = html;
+      updateAvailableBalance();
+      loadWithdrawalHistory();
     }
 
-    window.requestWithdrawal = async function() {
-      const uid = localStorage.getItem("uid");
-      const amount = parseFloat(document.getElementById('amount').value);
-      const errorMsg = document.getElementById('errorMsg');
-
-      if (!amount || amount < 1) return errorMsg.textContent = 'Minimum $1 required';
-
-      const res = await apiCall("withdrawal", "POST", { uid, amount });
-      if (res.success) {
-        alert("✅ Withdrawal request submitted successfully!");
-        loadWithdrawal();
-      } else {
-        errorMsg.textContent = res.message || "Failed to submit";
-      }
+    window.togglePaymentFields = function() {
+      const method = document.getElementById('method').value;
+      document.getElementById('upiFields').style.display = (method === 'UPI') ? 'block' : 'none';
+      document.getElementById('bankFields').style.display = (method === 'Bank') ? 'block' : 'none';
     };
+
+    function updateAvailableBalance() {
+      const user = auth.currentUser;
+      calculateAvailableBalance(user.uid, (bal) => {
+        document.getElementById('availableBalance').textContent = '$' + bal.toFixed(2);
+      });
+    }
+
+    window.requestWithdrawal = function() {
+      const user = auth.currentUser;
+      const amount = parseFloat(document.getElementById('amount').value);
+      const method = document.getElementById('method').value;
+      const errorMsg = document.getElementById('errorMsg');
+      errorMsg.textContent = '';
+
+      if (!amount || amount < 1) return errorMsg.textContent = 'Minimum withdrawal is $1';
+
+      let paymentData = { method };
+      if (method === 'UPI') {
+        const upiId = document.getElementById('upiId').value.trim();
+        if (!upiId) return errorMsg.textContent = 'Please enter UPI ID';
+        paymentData.upiId = upiId;
+      } else {
+        const holder = document.getElementById('holderName').value.trim();
+        const bank = document.getElementById('bankName').value.trim();
+        const acc = document.getElementById('accountNo').value.trim();
+        const ifsc = document.getElementById('ifsc').value.trim();
+        if (!holder || !bank || !acc || !ifsc) return errorMsg.textContent = 'Please fill all bank details';
+        paymentData.holderName = holder;
+        paymentData.bankName = bank;
+        paymentData.accountNo = acc;
+        paymentData.ifsc = ifsc;
+      }
+
+      calculateAvailableBalance(user.uid, (available) => {
+        if (amount > available) return errorMsg.textContent = 'Insufficient balance!';
+        db.ref('withdrawals/' + user.uid).push({
+          amount: amount,
+          ...paymentData,
+          status: "Pending",
+          timestamp: Date.now()
+        }).then(() => {
+          alert(`✅ Withdrawal request of $${amount} submitted successfully!`);
+          loadWithdrawal();
+        });
+      });
+    };
+
+    function loadWithdrawalHistory() {
+      const user = auth.currentUser;
+      const container = document.getElementById('withdrawalList');
+      db.ref('withdrawals/' + user.uid).on('value', (snapshot) => {
+        container.innerHTML = '';
+        if (!snapshot.exists()) {
+          container.innerHTML = '<p style="color:#666; text-align:center;">No withdrawal requests yet.</p>';
+          return;
+        }
+        snapshot.forEach((child) => {
+          const data = child.val();
+          const isDone = data.status === "Done";
+          let details = data.method === 'UPI' ? `UPI: ${data.upiId}` : `Bank: ${data.bankName} | A/c: ${data.accountNo}`;
+          const div = document.createElement('div');
+          div.className = `withdrawal-item ${isDone ? 'done' : ''}`;
+          div.innerHTML = `
+            <div>
+              <strong>$${data.amount}</strong> via ${data.method}<br>
+              <small>${details}</small><br>
+              <small>${new Date(data.timestamp).toLocaleString()}</small>
+            </div>
+            <span class="status ${isDone ? 'done' : 'pending'}">${data.status || 'Pending'}</span>
+          `;
+          container.appendChild(div);
+        });
+      });
+    }
 
     window.loadPage = function(page) {
       document.getElementById('sidebar').classList.remove('active');
@@ -324,10 +540,7 @@
     };
 
     window.logout = function() {
-      if (confirm("Logout karna chahte hain?")) {
-        localStorage.clear();
-        location.reload();
-      }
+      if (confirm("Logout karna chahte hain?")) auth.signOut().then(() => location.reload());
     };
   </script>
 </body>
