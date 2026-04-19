@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MyApp - Login</title>
+  
+  <!-- Local Font Awesome (CDN block issue solve) -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" 
+        crossorigin="anonymous" referrerpolicy="no-referrer" />
+
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+
+  <style>
+    :root { --primary: #1e3a8a; }
+    * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', sans-serif; }
+    body { 
+      background: linear-gradient(135deg, #f8fafc, #e0e7ff); 
+      min-height: 100vh; 
+      display: flex; 
+      align-items: center; 
+      justify-content: center;
+    }
+
+    .container {
+      background: white;
+      padding: 40px 35px;
+      border-radius: 20px;
+      box-shadow: 0 15px 40px rgba(0,0,0,0.12);
+      width: 100%;
+      max-width: 420px;
+    }
+
+    h2 { text-align: center; margin-bottom: 25px; color: #1e3a8a; }
+    .form-group { margin-bottom: 20px; }
+    label { display: block; margin-bottom: 6px; font-weight: 600; color: #374151; }
+    input {
+      width: 100%; padding: 14px; border: 2px solid #e5e7eb; border-radius: 10px;
+      font-size: 16px;
+    }
+    input:focus { border-color: #1e3a8a; outline: none; }
+
+    .btn {
+      width: 100%; padding: 15px; background: #1e3a8a; color: white;
+      border: none; border-radius: 12px; font-size: 17px; font-weight: 600;
+      cursor: pointer; margin-top: 10px;
+    }
+    .btn:hover { background: #162e6b; }
+
+    .toggle-link {
+      text-align: center; margin-top: 20px; color: #1e3a8a; cursor: pointer;
+      font-weight: 500;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container" id="authContainer">
+
+    <!-- Login Form -->
+    <div id="loginForm">
+      <h2><i class="fas fa-lock"></i> Login to MyApp</h2>
+      
+      <div class="form-group">
+        <label>Email Address</label>
+        <input type="email" id="loginEmail" placeholder="your@email.com">
+      </div>
+      <div class="form-group">
+        <label>Password</label>
+        <input type="password" id="loginPassword" placeholder="Enter password">
+      </div>
+
+      <button class="btn" onclick="loginUser()">Login</button>
+      <div class="toggle-link" onclick="showRegister()">Don't have an account? <strong>Register Now</strong></div>
+    </div>
+
+    <!-- Register Form -->
+    <div id="registerForm" style="display:none;">
+      <h2><i class="fas fa-user-plus"></i> Create New Account</h2>
+      
+      <div class="form-group">
+        <label>Email Address</label>
+        <input type="email" id="regEmail" placeholder="your@email.com">
+      </div>
+      <div class="form-group">
+        <label>Password</label>
+        <input type="password" id="regPassword" placeholder="Create password">
+      </div>
+      <div class="form-group">
+        <label>Re-enter Password</label>
+        <input type="password" id="regConfirmPassword" placeholder="Confirm password">
+      </div>
+
+      <button class="btn" onclick="registerUser()">Register Account</button>
+      <div class="toggle-link" onclick="showLogin()">Already have an account? <strong>Login</strong></div>
+    </div>
+  </div>
+
+  <!-- Main App -->
+  <div id="mainApp" style="display:none;">
+    <nav class="navbar">
+      <div class="nav-left">
+        <div class="menu-btn" id="menuBtn"><i class="fas fa-bars"></i></div>
+        <div class="logo">MyApp</div>
+      </div>
+      <div class="nav-right">
+        <div class="wallet" id="walletBalance">
+          <i class="fas fa-wallet"></i> $<span id="totalReward">0.00</span>
+        </div>
+      </div>
+    </nav>
+
+    <div class="sidebar" id="sidebar"> <!-- Sidebar content same as before --> </div>
+
+    <div class="main-content" id="mainContent">
+      <div class="content" id="pageContent"></div>
+    </div>
+  </div>
+
+  <script>
+     let auth;
+
+  // 🔐 Load Firebase config from Worker API
+  async function loadFirebase() {
+    try {
+      const res = await fetch("https://allapi.sawanenter7209.workers.dev/config");
+      const config = await res.json();
+
+      const firebaseConfig = {
+        apiKey: config.apiKey,
+        authDomain: "mail-5e9aa.firebaseapp.com",
+        databaseURL: config.databaseURL,
+        projectId: "mail-5e9aa",
+        storageBucket: "mail-5e9aa.firebasestorage.app",
+        messagingSenderId: "641872846790",
+        appId: "1:641872846790:web:6fb7aa7725d0a3c10d9cc7"
+      };
+
+      if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+      auth = firebase.auth();
+
+      console.log("✅ Firebase Loaded Securely");
+
+    } catch (err) {
+      console.error("❌ Config Load Failed:", err);
+    }
+  }
+
+  // Toggle Forms
+  function showRegister() {
+    document.getElementById('loginForm').style.display = 'none';
+    document.getElementById('registerForm').style.display = 'block';
+  }
+
+  function showLogin() {
+    document.getElementById('registerForm').style.display = 'none';
+    document.getElementById('loginForm').style.display = 'block';
+  }
+
+  // Register
+  window.registerUser = async function() {
+    const email = document.getElementById('regEmail').value.trim();
+    const pass = document.getElementById('regPassword').value.trim();
+    const confirmPass = document.getElementById('regConfirmPassword').value.trim();
+
+    if (!email || !pass || !confirmPass) {
+      alert("All fields required");
+      return;
+    }
+
+    if (pass !== confirmPass) {
+      alert("Password mismatch");
+      return;
+    }
+
+    if (pass.length < 6) {
+      alert("Min 6 characters");
+      return;
+    }
+
+    try {
+      await auth.createUserWithEmailAndPassword(email, pass);
+      alert("✅ Registered! Now login.");
+      showLogin();
+    } catch (err) {
+      alert("Error: " + err.message);
+    }
+  };
+
+  // Login + API Call + Redirect
+  window.loginUser = async function() {
+    const email = document.getElementById('loginEmail').value.trim();
+    const password = document.getElementById('loginPassword').value.trim();
+
+    if (!email || !password) {
+      alert("Enter email & password");
+      return;
+    }
+
+    try {
+      const userCredential = await auth.signInWithEmailAndPassword(email, password);
+      const user = userCredential.user;
+
+      // 🔥 Call your Worker API (optional logging)
+      try {
+        await fetch("https://allapi.sawanenter7209.workers.dev/", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: user.email,
+            uid: user.uid,
+            time: Date.now()
+          })
+        });
+      } catch (e) {}
+
+      // ✅ Redirect
+      window.location.href = "https://www.irctc.co.in/nget/train-search";
+
+    } catch (err) {
+      alert("Login Failed: " + err.message);
+    }
+  };
+
+  // Auto login redirect
+  window.onload = async () => {
+    await loadFirebase();
+
+    firebase.auth().onAuthStateChanged((user) => {
+      if (user) {
+        window.location.href = "https://www.irctc.co.in/nget/train-search";
+      }
+    });
+  };
+</script>
+</body>
+</html>
